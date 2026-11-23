@@ -18,8 +18,8 @@ double osc(double dHertz, double dTime, int nType){
         case 3:{    //Saw wave (analogue / warm / slow)
             double dOutput = 0.0;
 
-            for(double n = 1.0; n < 100.0; n++){
-                dOutput += (sin(n * w(dHertz) + dTime)) / n;
+            for(double n = 1.0; n < 20.0; n++){
+                dOutput += (sin(n * w(dHertz) * dTime)) / n;
             }
             return dOutput * (2.0 / PI);
         }
@@ -66,8 +66,8 @@ struct sEnvelopeADSR{
             }
 
             // Decay
-            if(dLifeTime > dAttackTime && dLifeTime <= (dAttackTime + dDecayTime)){
-                dAmplitude = ((dLifeTime - dAttackTime) * (dSustainAmplitude - dStartAmplitude) + dStartAmplitude);
+           if(dLifeTime > dAttackTime && dLifeTime <= (dAttackTime + dDecayTime)){
+                dAmplitude = ((dLifeTime - dAttackTime) / dDecayTime) * (dSustainAmplitude - dStartAmplitude) + dStartAmplitude;
             }
 
             // Sustain
@@ -77,7 +77,7 @@ struct sEnvelopeADSR{
         } else{
 
             // Release
-            dAmplitude = (dTime - dTriggerOffTime) / dReleaseTime;
+           dAmplitude = ((dTime - dTriggerOffTime) / dReleaseTime) * (0.0 - dSustainAmplitude) + dSustainAmplitude;
         }
 
         if(dAmplitude <= 0.0001){
@@ -110,7 +110,7 @@ sEnvelopeADSR envelope;
 double MakeNoise( double dTime ){
 
     double dOutput = envelope.GetAmplitude(dTime) * osc(dFrequencyOutput, dTime, 3);
-    return dOutput = 0.4; // master volume
+    return dOutput * 0.4; // master volume
 }
 
 int main(){
@@ -132,9 +132,9 @@ if (devices.empty()) {
 // Link noise function with sound machine
 
 sound.SetUserFunction(MakeNoise);
-
+int nCurrentKey = -1;
 while(1){
-    int nCurrentKey = -1;
+    
     bool keyPressed = false;
     for (int k = 0; k < 15; k++){
 
