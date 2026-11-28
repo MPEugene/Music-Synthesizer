@@ -27,7 +27,7 @@ namespace synth
 		FTYPE on;	// Time note was activated
 		FTYPE off;	// Time note was deactivated
 		bool active;
-		int channel;
+		instrument_base *channel;
 
 		note()
 		{
@@ -260,14 +260,91 @@ namespace synth
 		}
 
 	};
+
+	struct instrument_drumkick : public instrument_base
+	{
+		instrument_drumkick()
+		{
+			env.dAttackTime = 0.01;
+			env.dDecayTime = 0.15;
+			env.dSustainAmplitude = 0.0;
+			env.dReleaseTime = 0.0;
+			dVolume = 1.0;
+		}
+
+		virtual FTYPE sound(const FTYPE dTime, synth::note n, bool &bNoteFinished)
+		{
+			FTYPE dAmplitude = synth::env(dTime, env, n.on, n.off);
+			if (dAmplitude <= 0.0) bNoteFinished = true;
+
+			FTYPE dSound =
+				+ 0.99 * synth::osc(dTime - n.on, synth::scale(n.id - 36), synth::OSC_SINE, 1.0, 1.0)
+				+ 0.01 * synth::osc(dTime - n.on, 0, synth::OSC_NOISE);
+
+			return dAmplitude * dSound * dVolume;
+		}
+	};
+
+	struct instrument_drumsnare : public instrument_base
+	{
+		instrument_drumsnare()
+		{
+			env.dAttackTime = 0.01;
+			env.dDecayTime = 0.2;
+			env.dSustainAmplitude = 0.0;
+			env.dReleaseTime = 0.0;
+			dVolume = 1.0;
+		}
+
+		virtual FTYPE sound(const FTYPE dTime, synth::note n, bool &bNoteFinished)
+		{
+			FTYPE dAmplitude = synth::env(dTime, env, n.on, n.off);
+			if (dAmplitude <= 0.0) bNoteFinished = true;
+
+			FTYPE dSound =
+				+ 0.5 * synth::osc(dTime - n.on, synth::scale(n.id - 24), synth::OSC_SINE, 0.5, 1.0)
+				+ 0.5 * synth::osc(dTime - n.on, 0, synth::OSC_NOISE);
+
+			return dAmplitude * dSound * dVolume;
+		}
+	};
+
+	struct instrument_drumhihat : public instrument_base
+	{
+		instrument_drumhihat()
+		{
+			env.dAttackTime = 0.01;
+			env.dDecayTime = 0.05;
+			env.dSustainAmplitude = 0.0;
+			env.dReleaseTime = 0.0;
+			dVolume = 1.0;
+		}
+
+		virtual FTYPE sound(const FTYPE dTime, synth::note n, bool &bNoteFinished)
+		{
+			FTYPE dAmplitude = synth::env(dTime, env, n.on, n.off);
+			if (dAmplitude <= 0.0) bNoteFinished = true;
+
+			FTYPE dSound = 0.1 * synth::osc(dTime - n.on, 0, synth::OSC_NOISE);
+
+			return dAmplitude * dSound * dVolume;
+		}
+	};
+
 	
 }
 
 vector<synth::note> vecNotes;
 mutex muxNotes;
 synth::instrument_bell instBell;
+synth::instrument_bell8 instBell8;
 synth::instrument_harmonica instHarm;
+synth::instrument_drumkick instKick;
+synth::instrument_drumsnare instSnare;
+synth::instrument_drumhihat instHiHat;
 
+int nCurrentInstrument = 1;
+bool bBeatPlaying = false;
 
 
 typedef bool(*lambda)(synth::note const& item);
@@ -284,7 +361,7 @@ void safe_remove(T &v, lambda f)
 
 // Function used by olcNoiseMaker to generate sound waves
 // Returns amplitude (-1.0 to +1.0) as a function of time
-FTYPE MakeNoise( FTYPE dTime)
+FTYPE MakeNoise(int channel, FTYPE dTime)
 {	
 	unique_lock<mutex> lm(muxNotes);
 	FTYPE dMixedOutput = 0.0;
@@ -293,14 +370,16 @@ FTYPE MakeNoise( FTYPE dTime)
 	{
 		bool bNoteFinished = false;
 		FTYPE dSound = 0;
-		if(n.channel == 2)
-			dSound = instBell.sound(dTime, n, bNoteFinished);
-		if (n.channel == 1)
-			dSound = instHarm.sound(dTime, n, bNoteFinished) * 0.5;
+		
+		if(n.channel != nullptr){
+			dSound = n.channel->sound(dTime, n, bNoteFinished);
+		}
+
 		dMixedOutput += dSound;
 
-		if (bNoteFinished && n.off > n.on)
+		if(bNoteFinished){
 			n.active = false;
+		}
 	}
 
 	// Woah! Modern C++ Overload!!!
@@ -337,7 +416,7 @@ int main()
 
 
 	// Create sound machine!!
-	olcNoiseMaker<short> sound(devices[0], 44100, 1, 8, 512);
+	olcNoiseMaker<short> sound(devices[0], 44100, 1, 8, 256);
 
 	// Link noise function with sound machine
 	sound.SetUserFunction(MakeNoise);
@@ -350,8 +429,69 @@ int main()
 	auto clock_real_time = chrono::high_resolution_clock::now();
 	double dElapsedTime = 0.0;
 
+	double dBeatTimer = 0.0;
+	double dLastTime = sound.GetTime();
+	int nBeatStep = 0;
+	bool bSpaceWasDown = false;
+
+	DrawPiano(vecNotes);
+
 	while (1)
 	{
+
+		// 1. Switch melody instrument with keys 1, 2, 3
+		if ((GetAsyncKeyState('1') & 0x8000) && nCurrentInstrument != 1) { nCurrentInstrument = 1; bStateChanged = true; }
+		if ((GetAsyncKeyState('2') & 0x8000) && nCurrentInstrument != 2) { nCurrentInstrument = 2; bStateChanged = true; }
+		if ((GetAsyncKeyState('3') & 0x8000) && nCurrentInstrument != 3) { nCurrentInstrument = 3; bStateChanged = true; }
+
+		// 2. Toggle background drum beat with SPACEBAR
+		bool bSpaceDown = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+		if (bSpaceDown && !bSpaceWasDown)
+		{
+			bBeatPlaying = !bBeatPlaying;
+			nBeatStep = 0;
+			dBeatTimer = 0.0;
+			bStateChanged = true;
+		}
+		bSpaceWasDown = bSpaceDown;
+
+		// 3. Automated 16-step drum pattern (Part 4 Sequencer logic)
+		double dTimeNow = sound.GetTime();
+		double dElapsed = dTimeNow - dLastTime;
+		dLastTime = dTimeNow;
+
+		if (bBeatPlaying)
+		{
+			dBeatTimer += dElapsed;
+			if (dBeatTimer >= 0.125) // 120 BPM 16th-note step
+			{
+				dBeatTimer -= 0.125;
+
+				// 16-step patterns: 'X' = trigger, '.' = rest
+				const char* patKick  = "X...X...X...X...";
+				const char* patSnare = "....X.......X...";
+				const char* patHiHat = "X.X.X.X.X.X.X.XX";
+
+				muxNotes.lock();
+				auto triggerDrum = [&](int channel) {
+					synth::note dn;
+					dn.id = 0;
+					dn.on = dTimeNow;
+					dn.off = dTimeNow + 0.01; // Percussive auto-release
+					dn.channel = channel;
+					dn.active = true;
+					vecNotes.emplace_back(dn);
+				};
+
+				if (patKick[nBeatStep] == 'X')  triggerDrum(4);
+				if (patSnare[nBeatStep] == 'X') triggerDrum(5);
+				if (patHiHat[nBeatStep] == 'X') triggerDrum(6);
+				muxNotes.unlock();
+
+				nBeatStep = (nBeatStep + 1) % 16;
+			}
+		}
+
 		for (int k = 0; k < 16; k++)
 		{
 			short nKeyState = GetAsyncKeyState((unsigned char)("ZSXCFVGBNJMK\xbcL\xbe\xbf"[k]));
@@ -408,8 +548,13 @@ int main()
 			muxNotes.unlock();		
 		}
 		wcout << "\rNotes: " << vecNotes.size() << "    ";
+		const wchar_t* instName = (nCurrentInstrument == 1) ? L"Harmonica" :
+	                          (nCurrentInstrument == 2) ? L"Bell" : L"8-Bit Bell";
 
-		//this_thread::sleep_for(5ms);
+		wcout << L"Instrument [1-3]: " << instName << L"   |   Drum Beat [SPACE]: "
+			<< (bBeatPlaying ? L"ON " : L"OFF") << L"   " << endl;
+
+			//this_thread::sleep_for(5ms);
 	}
 
 	return 0;
